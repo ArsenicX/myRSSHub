@@ -1,15 +1,12 @@
 import { Route } from '@/types';
-import { load } from 'cheerio';
-import got from '@/utils/got';
 import InvalidParameterError from '@/errors/types/invalid-parameter';
-import { CookieJar } from 'tough-cookie';
-const cookieJar = new CookieJar();
+import { doGot, genSize } from './util';
 
 export const route: Route = {
     path: '/mv/:number/:domain?',
     categories: ['multimedia'],
-    example: '/mv/35575567/2',
-    parameters: { domain: '1-9,默认 2', number: '影视详情id' },
+    example: '/bt0/mv/35575567/2',
+    parameters: { number: '影视详情id, 网页路径为`/mv/{id}.html`其中的id部分, 一般为8位纯数字', domain: '数字1-9, 比如1表示请求域名为 1bt0.com, 默认为 2' },
     features: {
         requireConfig: false,
         requirePuppeteer: false,
@@ -26,11 +23,6 @@ export const route: Route = {
     name: '影视资源下载列表',
     maintainers: ['miemieYaho'],
     handler,
-    description: `:::tip
-  (1-9)bt0.com 都能访问, 就拿 2bt0.com 为默认了
-  影视详情id 是\`https://www.2bt0.com/mv/{id}.html\`其中的 id 的值
-  可选参数\`domain\` 是 \`https://www.{domain}bt0.com\` 其中的 domain 的值,可以是 1-9,访问的都是同一个东西
-  :::`,
 };
 
 async function handler(ctx) {
@@ -45,76 +37,29 @@ async function handler(ctx) {
     }
 
     const host = `https://www.${domain}bt0.com`;
-    const _link = `${host}/mv/${number}.html`;
+    const _link = `${host}/prod/core/system/getVideoDetail/${number}`;
 
-    const $ = await doGot(0, host, _link);
-    const name = $('span.info-title.lh32').text();
-    const items = $('div.container .container .col-md-10.tex_l')
-        .toArray()
-        .map((item) => {
-            item = $(item);
-            const torrent_info = item.find('.torrent-title').first();
-            const _title = torrent_info.text();
-            const len = item.find('.tag-sm.tag-size.text-center').first().text();
-            return {
-                title: _title,
-                guid: _title,
-                description: `${_title}[${len}]`,
-                link: host + torrent_info.attr('href'),
-                pubDate: item.find('.tag-sm.tag-download.text-center').eq(1).text(),
-                enclosure_type: 'application/x-bittorrent',
-                enclosure_url: item.find('.col-md-3 a').first().attr('href'),
-                enclosure_length: convertToBytes(len),
-            };
-        });
-    // browser.close();
+    const data = (await doGot(0, host, _link)).data;
+    const items = Object.values(data.ecca).flatMap((item) =>
+        item.map((i) => ({
+            title: i.zname,
+            guid: i.zname,
+            description: `${i.zname}[${i.zsize}]`,
+            link: `${host}/tr/${i.id}.html`,
+            pubDate: i.ezt,
+            enclosure_type: 'application/x-bittorrent',
+            enclosure_url: i.zlink,
+            enclosure_length: genSize(i.zsize),
+            category: strsJoin(i.zqxd, i.text_html, i.audio_html, i.new === 1 ? '新' : ''),
+        }))
+    );
     return {
-        title: name,
-        link: _link,
+        title: data.title,
+        link: `${host}/mv/${number}.html`,
         item: items,
     };
 }
 
-async function doGot(num, host, link) {
-    if (num > 4) {
-        throw new Error('The number of attempts has exceeded 5 times');
-    }
-    const response = await got.get(link, {
-        cookieJar,
-    });
-    const $ = load(response.data);
-    const script = $('script').text();
-    const regex = /document\.cookie\s*=\s*"([^"]*)"/;
-    const match = script.match(regex);
-    if (script && match) {
-        cookieJar.setCookieSync(match[1], host);
-        return doGot(++num, host, link);
-    }
-    return $;
-}
-
-function convertToBytes(sizeStr) {
-    // 正则表达式，用于匹配数字和单位 GB 或 MB
-    const regex = /^(\d+(\.\d+)?)\s*(gb|mb)$/i;
-    const match = sizeStr.match(regex);
-
-    if (!match) {
-        return 0;
-    }
-
-    const value = Number.parseFloat(match[1]);
-    const unit = match[3].toUpperCase();
-
-    let bytes;
-    switch (unit) {
-        case 'GB':
-            bytes = Math.floor(value * 1024 * 1024 * 1024);
-            break;
-        case 'MB':
-            bytes = Math.floor(value * 1024 * 1024);
-            break;
-        default:
-            bytes = 0;
-    }
-    return bytes;
+function strsJoin(...strings) {
+    return strings.filter((str) => str !== '').join(',');
 }
